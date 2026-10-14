@@ -4,4 +4,26 @@ version = "0.1.0"
 description = "企业产品文档智能知识库问答系统"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "fastapi",
+    "flagembedding",
+    "langchain",
+    "langchain-community",
+    "langchain-openai",
+    "langgraph",
+    "loguru",
+    "numpy",
+    "openai",
+    "pandas",
+    "pymilvus",
+    "python-dotenv",
+    "python-multipart",
+    "regex",
+    "requests",
+    "uvicorn",
+]
+
+[[tool.uv.index]]
+name = "tuna"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true
