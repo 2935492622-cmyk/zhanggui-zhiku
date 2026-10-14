@@ -1,0 +1,7 @@
+[project]
+name = "zhanggui-zhiku"
+version = "0.1.0"
+description = "企业产品文档智能知识库问答系统"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = []
