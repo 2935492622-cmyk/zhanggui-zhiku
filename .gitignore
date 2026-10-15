@@ -9,3 +9,10 @@ wheels/
 # Virtual environments
 .venv
 .env
+
+# ---- 掌柜智库自定义 ----
+doc/
+data/
+logs/
+.idea/
+.vscode/
