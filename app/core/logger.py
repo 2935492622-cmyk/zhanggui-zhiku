@@ -108,7 +108,13 @@ def fix_log_position(record):
         filename = frame.f_code.co_filename
         funcname = frame.f_code.co_name
         # 跳过 loguru 内部帧 + 本文件自身的帧
-        if "_logger.py" in filename or funcname == "_log" or filename == _THIS_FILE:
+        if (
+            "_logger.py" in filename
+            or funcname == "_log"
+            or filename == _THIS_FILE
+            or "site-packages" in filename
+        ):
+
             frame = frame.f_back
             depth += 1
             continue
