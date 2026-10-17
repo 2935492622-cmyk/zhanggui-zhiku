@@ -86,7 +86,12 @@ def create_default_state(**overrides) -> ImportGraphState:
     state = copy.deepcopy(graph_default_state)
     state.update(overrides)
     return state
-
+'''
+这个函数的意思是：
+1. 从默认模板复制一份全新的状态。
+2. 把调用者传进来的参数覆盖到这份状态中。
+3. 返回这份新状态。
+'''
 
 def get_default_state() -> ImportGraphState:
     """返回一个全新的默认状态（深拷贝，避免全局变量污染）"""
