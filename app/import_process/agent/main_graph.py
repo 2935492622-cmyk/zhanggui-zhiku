@@ -88,6 +88,11 @@ workflow.add_conditional_edges(
         END: END,
     },
 )
+'''
+先根据状态决定路径，将PDF和markdown进行分流，然后根据运算结果选择。
+然后剩下的节点是：识别图片、识别标题、向 Milvus 插入数据。只需要建立固定节点，不需要路由函数。
+add_edge:建立固定联系   add_conditional_edges:建立可变联系,根据状态决定路径
+'''
 
 # 5. 静态边：这两条路最终汇合到 node_document_split
 workflow.add_edge("node_pdf_to_md", "node_md_img")  # PDF 转完 MD 也要处理图片
