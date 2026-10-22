@@ -56,6 +56,8 @@ class ImportGraphState(TypedDict):
     item_name: str  # 识别出的商品主体名，如 "HAK180 烫金机"
 
     # --- 向量数据 ---
+    item_embedding: dict  # 品名自身的 dense/sparse 向量
+    import_result: dict  # 真实写入统计，仅完整成功时填充
     embeddings_content: List[dict]  # 带 dense/sparse 向量的切片，准备写 Milvus
 
 
@@ -73,6 +75,8 @@ graph_default_state: ImportGraphState = {
     "chunks": [],
     "item_name": "",
     "embeddings_content": [],
+    "item_embedding": {},
+    "import_result": {},
 }
 
 

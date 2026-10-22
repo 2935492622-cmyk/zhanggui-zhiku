@@ -83,7 +83,7 @@ def init_logger():
             encoding="utf-8",  # 中文不乱码
             enqueue=True,
             backtrace=True,
-            diagnose=True,  # 异常时输出变量值，开发期很有用
+            diagnose=False,  # 异常堆栈不展开局部变量，避免暴露配置和客户端凭据
         )
 
     return _base_logger

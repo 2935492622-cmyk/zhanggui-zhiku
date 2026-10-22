@@ -1,34 +1,25 @@
-"""
-tests/test_node_pdf_to_md.py —— PDF 转 Markdown 的测试
+"""PDF 节点测试：纯算法、标注 mock 的故障测试、标注 integration 的真实解析。
 
-【为什么分两类测试】
-    纯函数测试（正则 / 字号统计 / 页眉页脚 / 标题分级）：不需要 pymupdf、不需要真实 PDF，
-    毫秒级，任何环境都能跑 —— 这部分钉死的是**算法逻辑**。
-    冒烟测试：需要 pymupdf + doc/ 里至少一本真实 PDF，验证**端到端真的能解析**。
-    pymupdf 没装时冒烟测试自动 skip，不会让整个测试变红。
+所有解析产物写入 tmp_path，不修改 doc/ 语料或正式 data/parsed。
 """
+
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from app.core.config import settings
+import app.import_process.agent.nodes.node_pdf_to_md as mod
+from app.utils.task_utils import get_task_status, get_task_result, get_done_task_list, get_running_task_list
+
 from app.import_process.agent.state import create_default_state
 from app.import_process.agent.nodes.node_pdf_to_md import (
     _PAGE_NUM_RE,
     _body_font_size,
     _detect_boilerplate,
     _page_to_markdown,
-    fitz,
     node_pdf_to_md,
     pdf_to_markdown,
 )
-
-_HAS_PYMUPDF = fitz is not None
-_REAL_PDFS = sorted(settings.doc_path.glob("*.pdf")) if settings.doc_path.exists() else []
-_NEEDS_REAL_PDF = pytest.mark.skipif(
-    not _HAS_PYMUPDF or not _REAL_PDFS,
-    reason="需要 pymupdf 且 doc/ 里至少有一本 PDF",
-)
-
 
 # ---------------- 纯函数：页码行识别 ----------------
 
@@ -99,10 +90,10 @@ def test_page_to_markdown_heading_levels():
     assert out == ["# 大标题", "## 小标题", "这是正文"]
 
 
-def test_page_to_markdown_drops_boilerplate_and_page_num():
+def test_page_to_markdown_preserves_body_numbers():
     lines = [("页眉文字", 9.0), ("7", 9.0), ("真正的内容", 10.0)]
     out = _page_to_markdown(lines, body_size=10.0, boilerplate={"页眉文字"})
-    assert out == ["真正的内容"]
+    assert out == ["7", "真正的内容"]
 
 
 def test_page_to_markdown_long_text_is_not_heading():
@@ -112,55 +103,223 @@ def test_page_to_markdown_long_text_is_not_heading():
     assert out == [long_text]
 
 
-# ---------------- 节点：降级路径 ----------------
+# ---------------- 节点单元测试：Mock 解析，验证状态及 IO 失败 ----------------
 
-def test_node_empty_pdf_path_degrades_silently():
-    """pdf_path 为空 -> 不抛异常，md_content 保持空。"""
-    state = create_default_state(task_id="t_empty", pdf_path="")
-    result = node_pdf_to_md(state)
-    assert result["md_content"] == ""
-    assert result["md_path"] == ""
+@pytest.fixture(autouse=True)
+def isolated_output(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "settings", SimpleNamespace(parsed_path=tmp_path / "parsed"))
 
 
-def test_node_missing_file_logs_error_and_degrades(tmp_path):
-    """文件不存在 -> 打 error 日志并降级，不抛异常（批量导入需要这个行为）。"""
-    missing = tmp_path / "not_exist.pdf"
-    state = create_default_state(task_id="t_missing", pdf_path=str(missing))
-    result = node_pdf_to_md(state)
-    assert result["md_content"] == ""
-    assert result["md_path"] == ""
+def _state(path):
+    return create_default_state(task_id="pdf_test", pdf_path=str(path), file_title="manual")
 
 
-def test_node_raises_when_pymupdf_absent(monkeypatch):
-    """pymupdf 没装时，节点不该静默返回空内容 —— 必须抛，否则下游很难排查。"""
-    import app.import_process.agent.nodes.node_pdf_to_md as mod
+def _assert_failed(state):
+    assert state["md_content"] == state["md_path"] == ""
+    assert get_task_status(state["task_id"]) == "failed"
+    assert get_task_result(state["task_id"], "error")
+    assert get_running_task_list(state["task_id"]) == []
+    assert "PDF转Markdown" not in get_done_task_list(state["task_id"])
 
+
+def test_node_empty_pdf_path_fails():
+    state = _state("")
+    with pytest.raises(ValueError, match="pdf_path"):
+        node_pdf_to_md(state)
+    _assert_failed(state)
+
+
+def test_node_missing_file_fails(tmp_path):
+    state = _state(tmp_path / "missing.pdf")
+    with pytest.raises(FileNotFoundError):
+        node_pdf_to_md(state)
+    _assert_failed(state)
+
+
+@pytest.mark.mock
+def test_node_raises_when_pymupdf_absent(tmp_path, monkeypatch):
+    path = tmp_path / "input.pdf"
+    path.write_bytes(b"input")
     monkeypatch.setattr(mod, "fitz", None)
-    state = create_default_state(task_id="t_nofitz", pdf_path=str(_REAL_PDFS[0] if _REAL_PDFS else "x.pdf"))
-    if _REAL_PDFS:
-        with pytest.raises(RuntimeError, match="pymupdf"):
-            node_pdf_to_md(state)
+    state = _state(path)
+    with pytest.raises(RuntimeError, match="pymupdf"):
+        node_pdf_to_md(state)
+    _assert_failed(state)
 
 
-# ---------------- 端到端冒烟（需要真实 PDF） ----------------
+@pytest.mark.mock
+@pytest.mark.parametrize("result", ["", "   ", None])
+def test_node_rejects_empty_parser_output(tmp_path, monkeypatch, result):
+    path = tmp_path / "input.pdf"
+    path.write_bytes(b"input")
+    monkeypatch.setattr(mod, "pdf_to_markdown", lambda path: result)
+    state = _state(path)
+    state.update(md_content="old", md_path="old.md")
+    with pytest.raises(ValueError, match="为空"):
+        node_pdf_to_md(state)
+    _assert_failed(state)
+    assert not mod.settings.parsed_path.exists()
 
-@_NEEDS_REAL_PDF
-def test_real_pdf_produces_non_empty_markdown():
-    md = pdf_to_markdown(_REAL_PDFS[0])
-    assert isinstance(md, str)
-    assert len(md) > 100
+
+@pytest.mark.mock
+def test_mock_parser_failure(tmp_path, monkeypatch):
+    path = tmp_path / "input.pdf"
+    path.write_bytes(b"input")
+
+    def fail(path):
+        raise RuntimeError("parser failure")
+
+    monkeypatch.setattr(mod, "pdf_to_markdown", fail)
+    state = _state(path)
+    with pytest.raises(RuntimeError, match="parser failure"):
+        node_pdf_to_md(state)
+    _assert_failed(state)
+
+
+@pytest.mark.mock
+@pytest.mark.parametrize("stage", ["mkdir", "write"])
+def test_mock_output_failure(tmp_path, monkeypatch, stage):
+    path = tmp_path / "input.pdf"
+    path.write_bytes(b"input")
+    monkeypatch.setattr(mod, "pdf_to_markdown", lambda path: "# Title\nBody")
+
+    def fail(*args, **kwargs):
+        raise PermissionError("output denied")
+
+    monkeypatch.setattr(Path, "mkdir" if stage == "mkdir" else "write_text", fail)
+    state = _state(path)
+    with pytest.raises(PermissionError):
+        node_pdf_to_md(state)
+    _assert_failed(state)
+    if stage == "write":
+        assert list(mod.settings.parsed_path.iterdir()) == []
+
+
+def test_short_documents_do_not_lose_boilerplate_candidates():
+    for n in (1, 2):
+        assert _detect_boilerplate([[("Important instruction", 10.0)]] * n) == set()
+
+
+# ---------------- 真正调用 PyMuPDF 的本地集成测试 ----------------
+
+@pytest.fixture
+def sample_pdf(tmp_path):
+    engine = pytest.importorskip("pymupdf")
+    path = tmp_path / "manual.pdf"
+    with engine.open() as doc:
+        page = doc.new_page()
+        page.insert_text((72, 100), "Machine Manual", fontsize=18)
+        page.insert_text((72, 150), "Instructions and operating details for the machine. " * 2, fontsize=10)
+        page.insert_text((72, 180), "180", fontsize=10)
+        page.insert_text((72, 210), "Disconnect power before maintenance. " * 2, fontsize=10)
+        page.insert_text((72, 820), "1", fontsize=9)
+        doc.save(path)
+    return path
+
+
+@pytest.mark.integration
+def test_real_pdf_preserves_single_page_body(sample_pdf):
+    md = pdf_to_markdown(sample_pdf)
     assert "<!-- page 1 -->" in md
+    assert "# Machine Manual" in md
+    assert "Instructions" in md
+    assert "\n180\n" in md  # 正文数字不能当页码删除
+    assert not md.rstrip().endswith("\n1")
 
 
-@_NEEDS_REAL_PDF
-def test_node_end_to_end_writes_file():
-    """跑完整节点，验证落盘 + state 两个字段都被写上了。
-    产物写到 data/parsed/（已被 .gitignore 忽略），不会进仓库。"""
-    target = _REAL_PDFS[0]
-    state = create_default_state(
-        task_id="t_e2e", pdf_path=str(target), file_title=f"_test_{target.stem}"
-    )
-    result = node_pdf_to_md(state)
-    assert result["md_content"]
-    assert result["md_path"].endswith(".md")
-    assert (settings.parsed_path / f"_test_{target.stem}.md").exists()
+@pytest.mark.integration
+def test_node_real_conversion_and_unique_outputs(sample_pdf):
+    first = node_pdf_to_md(_state(sample_pdf))
+    original = Path(first["md_path"]).read_text(encoding="utf-8")
+    second_state = _state(sample_pdf)
+    second_state["file_title"] = "../../outside"
+    second = node_pdf_to_md(second_state)
+    assert first["md_path"] != second["md_path"]
+    assert Path(first["md_path"]).read_text(encoding="utf-8") == original
+    assert second["md_content"] == original
+    assert Path(second["md_path"]).is_relative_to(mod.settings.parsed_path)
+    assert get_running_task_list("pdf_test") == []
+    assert get_done_task_list("pdf_test") == ["PDF转Markdown"]
+    assert get_task_status("pdf_test") == "processing"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("kind", ["corrupt", "blank", "encrypted", "not_pdf"])
+def test_real_invalid_pdf_fails(tmp_path, kind):
+    engine = pytest.importorskip("pymupdf")
+    path = tmp_path / "invalid.pdf"
+    if kind == "corrupt":
+        path.write_bytes(b"%PDF-1.7 garbage")
+    elif kind == "not_pdf":
+        # PyMuPDF 可以读取其他格式，这里必须明确拒绝。
+        with engine.open() as doc:
+            doc.new_page()
+            doc[0].get_pixmap().save(tmp_path / "image.png")
+        path.write_bytes((tmp_path / "image.png").read_bytes())
+    else:
+        with engine.open() as doc:
+            doc.new_page()
+            options = dict(encryption=engine.PDF_ENCRYPT_AES_256,
+                           owner_pw="owner", user_pw="reader") if kind == "encrypted" else {}
+            doc.save(path, **options)
+    state = _state(path)
+    expected = engine.FileDataError if kind == "corrupt" else ValueError
+    with pytest.raises(expected):
+        node_pdf_to_md(state)
+    _assert_failed(state)
+    assert not mod.settings.parsed_path.exists()
+
+
+@pytest.mark.integration
+def test_position_filter_keeps_same_text_in_body(tmp_path):
+    engine = pytest.importorskip("pymupdf")
+    path = tmp_path / "repeat.pdf"
+    with engine.open() as doc:
+        for i in range(3):
+            page = doc.new_page()
+            page.insert_text((72, 30), "Repeated label", fontsize=10)
+            page.insert_text((72, 150), "Repeated label", fontsize=10)
+            page.insert_text((72, 180), f"Unique body section {i}", fontsize=10)
+        doc.save(path)
+    md = pdf_to_markdown(path)
+    assert md.count("Repeated label") == 3
+    assert all(f"<!-- page {i} -->" in md for i in (1, 2, 3))
+
+
+@pytest.mark.integration
+def test_corpus_pdf_conversion(first_real_pdf):
+    state = node_pdf_to_md(_state(first_real_pdf))
+    assert len(state["md_content"]) > 100
+    assert "<!-- page " in state["md_content"]
+    assert Path(state["md_path"]).read_text(encoding="utf-8") == state["md_content"]
+
+
+@pytest.mark.integration
+def test_empty_page_keeps_original_page_numbers(tmp_path):
+    engine = pytest.importorskip("pymupdf")
+    path = tmp_path / "mixed.pdf"
+    with engine.open() as doc:
+        doc.new_page()  # 没有文本层；当前不做 OCR。
+        page = doc.new_page()
+        page.insert_text((72, 120), "Text on original page two", fontsize=12)
+        doc.save(path)
+    md = pdf_to_markdown(path)
+    assert "<!-- page 2 -->" in md
+    assert "<!-- page 1 -->" not in md
+    assert "Text on original page two" in md
+
+
+@pytest.mark.integration
+def test_retry_clears_stale_outputs(sample_pdf, monkeypatch):
+    state = node_pdf_to_md(_state(sample_pdf))
+    previous_output = Path(state["md_path"])
+    engine = mod.fitz
+    monkeypatch.setattr(mod, "fitz", None)
+    with pytest.raises(RuntimeError, match="pymupdf"):
+        node_pdf_to_md(state)
+    _assert_failed(state)
+    assert previous_output.is_file()  # 失败重试不删除上次已成功产物。
+    monkeypatch.setattr(mod, "fitz", engine)
+    node_pdf_to_md(state)
+    assert get_task_result("pdf_test", "error") == ""
+    assert get_task_status("pdf_test") == "processing"

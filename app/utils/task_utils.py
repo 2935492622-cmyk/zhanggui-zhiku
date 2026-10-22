@@ -31,6 +31,7 @@ TASK_STATUS_PENDING = "pending"
 TASK_STATUS_PROCESSING = "processing"
 TASK_STATUS_COMPLETED = "completed"
 TASK_STATUS_FAILED = "failed"
+TASK_STATUS_SKIPPED = "skipped"
 
 # key: task_id -> value: 节点名列表
 _tasks_running_list: Dict[str, List[str]] = {}
@@ -70,6 +71,8 @@ def _to_cn(node_name: str) -> str:
 def add_running_task(task_id: str, node_name: str) -> None:
     """标记某节点开始运行"""
     _ensure_task(task_id)
+    # 同一节点重试时，上次的完成记录不能代表本次成功。
+    _tasks_done_list[task_id] = [n for n in _tasks_done_list[task_id] if n != node_name]
     running = _tasks_running_list[task_id]
     if node_name not in running:  # 重跑同一节点时不重复追加
         running.append(node_name)
@@ -88,6 +91,15 @@ def set_task_result(task_id: str, key: str, value: str) -> None:
     """存任务结果字段，例如 set_task_result(task_id, "error", "xxx")"""
     _ensure_task(task_id)
     _tasks_result[task_id][key] = value
+
+
+def add_failed_task(task_id: str, node_name: str, error: str) -> None:
+    """结束失败节点的 running 状态，保留其他进度，不追加 done。"""
+    _ensure_task(task_id)
+    _tasks_running_list[task_id] = [n for n in _tasks_running_list[task_id] if n != node_name]
+    _tasks_done_list[task_id] = [n for n in _tasks_done_list[task_id] if n != node_name]
+    set_task_result(task_id, "error", error)
+    update_task_status(task_id, TASK_STATUS_FAILED)
 
 
 def get_task_result(task_id: str, key: str, default: str = "") -> str:

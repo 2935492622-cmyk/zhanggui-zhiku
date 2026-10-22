@@ -1,49 +1,73 @@
-"""
-app/import_process/agent/nodes/node_document_split.py —— 文档切分
-
-【解决什么问题】
-    一本手册几十上百页，整篇塞进向量库会导致：向量把整本书的语义平均掉，
-    检索「HAK180 怎么换色带」时命中不了具体那一段。
-    切分就是把长文档切成语义完整的片段（chunk），让向量能精确对应到段落。
-
-【入参 / 出参】
-    读：state["md_content"]、state["file_title"]
-    写：state["chunks"]（list[dict]，每个元素含 content + metadata）
-
-【为什么这是本项目最值得你自己写的节点】
-    切分策略直接决定检索质量上限，也是面试官最爱追问的地方：
-      - 边界怎么定？按 Markdown 标题层级（H1/H2/H3）切，还是按固定字数滑窗？
-      - 片段多大？太大语义模糊，太小丢失上下文；
-      - 要不要把标题路径（"第3章 > 3.2 更换色带"）前置进 embedding 文本？
-      - overlap 留多少？
-    这些没有标准答案，必须靠你自己做实验、看检索结果调。
-    参数先放 settings.chunk_max_size / chunk_min_size / chunk_overlap_ratio，
-    方便你改 .env 做对比实验，不用改代码。
-
-【一个针对本语料的具体问题】
-    设备手册里有大量「安全须知 / 合规声明」样板段落，每本都有且内容雷同。
-    它们会污染检索（不同型号的手册因为这些段落而互相相似）。
-    要不要过滤掉、怎么识别，是你做实验时要回答的问题。
-
-【当前状态】空壳（return state）。
-"""
-
-from app.core.logger import node_log
-from app.import_process.agent.state import ImportGraphState
-from app.utils.task_utils import add_done_task, add_running_task
+"""标题段落 + 字符窗口切分；offset 对应原 Markdown，页码缺失时为 None。"""
+import hashlib
+import re
+from app.core.config import settings
+from ._runtime import import_node
 
 
-@node_log("node_document_split")
-def node_document_split(state: ImportGraphState) -> ImportGraphState:
-    """
-    节点: 文档切分 (node_document_split)
-    将长文档切分成小的 Chunks (切片) 以便检索。
-    """
-    add_running_task(state["task_id"], "node_document_split")
-
-    # TODO: 1) 按 Markdown 标题层级递归切分 -> 2) 超长段落二次切分
-    #      -> 3) 过短片段贪心合并 -> 4) 生成 metadata（标题路径、页码、file_title）
-    # 参数从 settings 读：chunk_max_size / chunk_min_size / chunk_overlap_ratio
-
-    add_done_task(state["task_id"], "node_document_split")
+@import_node('node_document_split')
+def node_document_split(state):
+    state['chunks'] = []
+    text = state['md_content']
+    maximum, minimum = settings.chunk_max_size, settings.chunk_min_size
+    ratio = settings.chunk_overlap_ratio
+    if not text.strip() or not 0 < minimum <= maximum or not 0 <= ratio < 1:
+        raise ValueError('正文或切分参数无效')
+    source = state['local_file_path'] or state['md_path']
+    document_id = hashlib.sha256((source + '\0' + text).encode()).hexdigest()
+    headings, pages, fences = [], [], False
+    offset = 0
+    boundaries = [0]
+    for line in text.splitlines(keepends=True):
+        if line.lstrip().startswith(('```', '~~~')):
+            fences = not fences
+        if not fences:
+            h = re.match(r'^(#{1,6})\s+(.+?)\s*$', line)
+            if h:
+                headings.append((offset, len(h[1]), h[2]))
+                boundaries.append(offset)
+            p = re.search(r'<!--\s*page\s+(\d+)\s*-->', line)
+            if p:
+                pages.append((offset, int(p[1])))
+        offset += len(line)
+    boundaries = sorted(set(boundaries + [len(text)]))
+    # 先按标题分段，将短段与下一段合并（不超过长度上限）。
+    sections = []
+    for start, end in zip(boundaries, boundaries[1:]):
+        if sections and sections[-1][1] - sections[-1][0] < minimum and end - sections[-1][0] <= maximum:
+            sections[-1] = (sections[-1][0], end)
+        else:
+            sections.append((start, end))
+    chunks = []
+    for start, stop in sections:
+        while start < stop:
+            end = min(start + maximum, stop)
+            if end < stop:
+                boundary = text.rfind('\n', start + minimum, end)
+                if boundary > start:
+                    end = boundary + 1
+            content = text[start:end]
+            if content.strip():
+                stack = []
+                for pos, level, title in headings:
+                    if pos > start:
+                        break
+                    while stack and stack[-1][0] >= level:
+                        stack.pop()
+                    stack.append((level, title))
+                page_numbers = [number for pos, number in pages if pos <= start]
+                page_end = [number for pos, number in pages if pos < end]
+                chunks.append({'content': content, 'metadata': {
+                    'document_id': document_id, 'source': source, 'file_title': state['file_title'],
+                    'part': len(chunks), 'start': start, 'end': end,
+                    'title': stack[-1][1] if stack else state['file_title'],
+                    'parent_title': ' > '.join(t for _, t in stack[:-1]),
+                    'page_start': page_numbers[-1] if page_numbers else None,
+                    'page_end': page_end[-1] if page_end else None}})
+            if end == stop:
+                break
+            start = max(start + 1, end - int(maximum * ratio))
+    if not chunks:
+        raise ValueError('无有效切片')
+    state['chunks'] = chunks
     return state

@@ -1,42 +1,39 @@
+"""读取 UTF-8 Markdown，规范化内联图片路径；不上传、不下载、不做 VLM。
+
+支持 ![alt](path) 和 ![alt](<path with spaces>)；引用式/HTML 图片保留原文。
 """
-app/import_process/agent/nodes/node_md_img.py —— Markdown 中的图片处理
+import re
+from pathlib import Path
+from urllib.parse import urlsplit, unquote
+from app.core.logger import logger
+from ._runtime import import_node
 
-【解决什么问题】
-    设备手册里大量「按钮位置示意图」「接口定义图」。图片在 Markdown 里只是一个
-    本地相对路径，向量化时这段文字对检索毫无帮助（甚至是有噪声）。
-    这一步要做的事：把图片变成「能被检索到的文字描述」。
-
-【入参 / 出参】
-    读：state["md_content"]、state["file_title"]
-    写：state["md_content"]（把图片链接替换成可访问 URL + 图片描述）
-
-【三步实现】
-    1. 扫描 Markdown 里的图片引用（![alt](path)）；
-    2. 上传到对象存储（MinIO；M0 阶段 MINIO_ENABLED=false，用本地目录代替）；
-    3. 调多模态模型（qwen-vl-flash）给图片生成一句话描述，
-       把描述插回正文——这样「XX 接口长什么样」这种问题也能检索到。
-
-【注意】这一步依赖 LLM key。没配 key 时（settings.has_llm_key == False）
-    应该跳过第 3 步，只做链接替换，保证链路在无 key 环境下也能跑通。
-
-【当前状态】空壳（return state）。
-"""
-
-from app.core.logger import node_log
-from app.import_process.agent.state import ImportGraphState
-from app.utils.task_utils import add_done_task, add_running_task
+_IMAGE = re.compile(r'!\[([^\]\n]*)\]\((<[^>\n]+>|[^\s()]+)(\s+"[^"\n]*")?\)')
 
 
-@node_log("node_md_img")
-def node_md_img(state: ImportGraphState) -> ImportGraphState:
-    """
-    节点: 图片处理 (node_md_img)
-    处理 Markdown 中的图片资源 (Image)。
-    """
-    add_running_task(state["task_id"], "node_md_img")
-
-    # TODO: 1) 扫描图片链接 -> 2) 上传 MinIO/本地目录 -> 3) VLM 生成描述并插回正文
-    # 注意：第 3 步要判 settings.has_llm_key，没 key 就跳过，保证链路能跑通
-
-    add_done_task(state["task_id"], "node_md_img")
+@import_node('node_md_img')
+def node_md_img(state):
+    text = state['md_content']
+    path = Path(state['md_path']).expanduser()
+    if not text:
+        text = path.read_text(encoding='utf-8-sig')
+    if not text.strip():
+        raise ValueError('Markdown 为空')
+    # 分离代码块/行内代码，示例里的图片语法不能被改写。
+    parts = re.split(r'(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`)', text)
+    def replace(match):
+        alt, target, title = match.groups()
+        target = target.strip('<>')
+        scheme = urlsplit(target).scheme.lower()
+        if scheme in ('http', 'https', 'file') or target.startswith('//'):
+            return match.group(0)
+        if scheme:
+            logger.warning('图片包含不支持的 URI scheme，已转为替代文本')
+            return f'[图片：{alt or "无描述"}]'
+        image = (path.parent / unquote(target)).resolve()
+        if not image.is_file():
+            logger.warning('Markdown 引用的本地图片不存在，保留引用供排查')
+        return f'![{alt}](<{image.as_uri()}>{title or ""})'
+    state['md_content'] = ''.join(p if i % 2 else _IMAGE.sub(replace, p)
+                                  for i, p in enumerate(parts))
     return state

@@ -9,7 +9,7 @@ app/import_process/agent/main_graph.py —— 知识库导入流程的主图
 【图的形状】
                         ┌─ is_md_read_enabled  ─→ node_md_img ─────────┐
     START → node_entry ─┤                                              ├→ node_document_split
-                        └─ is_pdf_read_enabled ─→ node_pdf_to_md ──────┘        │
+                        └─ is_pdf_read_enabled ─→ node_pdf_to_md → node_md_img ─┘        │
                                                                                  ↓
     END ← node_import_milvus ← node_bge_embedding ← node_item_name_recognition ←┘
 
@@ -26,7 +26,7 @@ app/import_process/agent/main_graph.py —— 知识库导入流程的主图
     result = kb_import_app.invoke(create_default_state(task_id="001", local_file_path="doc/xxx.pdf"))
 
 【目前的状态】
-    7 个节点里只有 node_entry 是真实实现，其余 6 个是空壳（return state）。
+    7 个节点均有业务实现；模型与 Milvus 需要真实配置和兼容 Collection。
     这是故意的：先把「图能跑通、能测试」验证掉，再逐个填实现。
     这样每一步都有能运行的东西，不会出现写了 500 行却一次都跑不起来的情况。
 """
@@ -107,7 +107,7 @@ kb_import_app = workflow.compile()
 
 
 if __name__ == "__main__":
-    # 直接跑这个文件可以看图结构，不需要任何外部服务
+    # 打印图结构并实际解析示例 PDF，需要 PyMuPDF 和有效输入文件
     from app.import_process.agent.state import create_default_state
 
     kb_import_app.get_graph().print_ascii()
