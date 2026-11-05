@@ -146,6 +146,17 @@ def summarize_image(image_path: str, root_folder: str, image_content: Tuple[str,
     # 将图片编码为Base64，适配多模态大模型输入要求
     base64_image = encode_image_to_base64(image_path)
     try:
+        # 根据图片后缀声明媒体类型，Base64编码不会改变原始图片格式
+        mime_types = {
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".png": "image/png",
+            ".gif": "image/gif",
+            ".bmp": "image/bmp",
+            ".webp": "image/webp",
+        }
+        mime_type = mime_types[Path(image_path).suffix.lower()]
+
         # 1. 获取项目统一LLM客户端（自动缓存，传入多模态模型名）
         lvm_client = get_llm_client(model=lm_config.lv_model)
 
@@ -169,7 +180,7 @@ def summarize_image(image_path: str, root_folder: str, image_content: Tuple[str,
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": f"data:image/jpeg;base64,{base64_image}"
+                            "url": f"data:{mime_type};base64,{base64_image}"
                         }
                     }
                 ]
