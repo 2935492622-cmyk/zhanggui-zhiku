@@ -125,7 +125,7 @@ def step_2_scan_images(md_content: str, images_dir: Path) -> List[Tuple[str, str
 
 def encode_image_to_base64(image_path: str) -> str:
     """
-    将本地图片文件编码为Base64字符串（用于多模态大模型输入）
+    将本地图片文件编码为Base64字符串（用于多模态大模型输入）（先将普通字节编码为base64字节，再进行UTF-8解码）
     :param image_path: 图片本地完整路径
     :return: 图片的Base64编码字符串（UTF-8解码）
     """
@@ -469,8 +469,14 @@ if __name__ == "__main__":
     logger.info(f"本地测试 - 项目根目录：{PROJECT_ROOT}")
 
     # 测试MD文件路径（需手动将测试文件放入对应目录）
-    test_md_name = os.path.join(r"output\hak180产品安全手册", "hak180产品安全手册.md")
-    test_md_path = os.path.join(PROJECT_ROOT, test_md_name)
+    test_md_path = str(
+        PROJECT_ROOT
+        / "output"
+        / "20260319"
+        / "7dff03bc-3389-4e05-950a-fb1c1027784c"
+        / "hak180产品安全手册"
+        / "hak180产品安全手册.md"
+    )
 
     # 校验测试文件是否存在
     if not os.path.exists(test_md_path):

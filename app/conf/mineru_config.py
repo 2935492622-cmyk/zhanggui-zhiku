@@ -13,8 +13,10 @@ load_dotenv()
 class MineruConfig:
     base_url: str
     api_key : str
+    model_version: str = "vlm"  # pipeline / vlm
 
 mineru_config = MineruConfig(
     base_url=os.getenv("MINERU_BASE_URL"),
-    api_key=os.getenv("MINERU_API_TOKEN")
+    api_key=os.getenv("MINERU_API_TOKEN"),
+    model_version=os.getenv("MINERU_MODEL_VERSION", "vlm").strip().lower()
 )

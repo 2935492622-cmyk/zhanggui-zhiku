@@ -77,8 +77,9 @@ def step_2_upload_and_poll(pdf_path_obj: Path, output_dir_obj: Path):
     url_get_upload = f"{MINERU_BASE_URL}/file-urls/batch"
     req_data = {
         "files": [{"name": pdf_path_obj.name}],
-        "model_version": "vlm"  # 官方推荐解析模型
+        "model_version": mineru_config.model_version
     }
+    logger.info(f"[获取上传链接] 解析引擎：{mineru_config.model_version}，文件：{pdf_path_obj.name}")
     logger.debug(f"[获取上传链接] 调用接口：{url_get_upload}，请求参数：{req_data}")
     resp = requests.post(url=url_get_upload, headers=request_headers, json=req_data, timeout=30)
 
@@ -105,19 +106,27 @@ def step_2_upload_and_poll(pdf_path_obj: Path, output_dir_obj: Path):
     upload_session.trust_env = False
 
     try:
-        # 首次上传：自动识别文件类型
-        put_resp = upload_session.put(url=signed_url, data=file_data, timeout=60)
-        # 重试逻辑：首次失败则强制指定PDF的Content-Type
-        if put_resp.status_code != 200:
-            logger.warning(f"[文件上传] 首次上传失败（状态码：{put_resp.status_code}），强制指定PDF类型重试")
-            pdf_headers = {"Content-Type": "application/pdf"}
-            put_resp = upload_session.put(url=signed_url, data=file_data, headers=pdf_headers, timeout=60)
-            # 重试仍失败则抛出异常
-            if put_resp.status_code != 200:
-                raise RuntimeError(f"[文件上传] 重试后仍失败，状态码：{put_resp.status_code}，响应内容：{put_resp.text}")
+        # 预签名上传不额外设置Content-Type；限流或临时服务错误时退避重试
+        max_upload_attempts = 4
+        for attempt in range(1, max_upload_attempts + 1):
+            put_resp = upload_session.put(url=signed_url, data=file_data, timeout=60)
+            if put_resp.status_code == 200:
+                break
+            retryable = put_resp.status_code in (429, 500, 502, 503, 504)
+            if not retryable or attempt == max_upload_attempts:
+                raise RuntimeError(
+                    f"[文件上传] 上传失败（第{attempt}/{max_upload_attempts}次），"
+                    f"状态码：{put_resp.status_code}，响应内容：{put_resp.text}"
+                )
+            wait_seconds = 5 * (2 ** (attempt - 1))
+            logger.warning(
+                f"[文件上传] 临时失败（状态码：{put_resp.status_code}，"
+                f"第{attempt}/{max_upload_attempts}次），{wait_seconds}秒后重试"
+            )
+            time.sleep(wait_seconds)
         logger.info(f"[文件上传] 成功，文件{pdf_path_obj.name}已存入云存储")
-    except Exception as e:
-        raise RuntimeError(f"[文件上传] 网络异常导致上传失败，错误信息：{str(e)}")
+    except requests.RequestException as e:
+        raise RuntimeError(f"[文件上传] 网络异常导致上传失败，错误信息：{str(e)}") from e
     finally:
         # 无论成败，关闭Session释放网络连接，避免资源泄漏
         upload_session.close()
@@ -171,7 +180,7 @@ def step_2_upload_and_poll(pdf_path_obj: Path, output_dir_obj: Path):
             logger.info(f"[任务轮询] 解析任务完成！总耗时：{int(elapsed_time)}s，batch_id：{batch_id}")
             full_zip_url = result_item.get("full_zip_url")
             if not full_zip_url:
-                raise RuntimeError("[任务轮询] 任务完成但未返回ZIP包下载链接，batch_id：{batch_id}")
+                raise RuntimeError(f"[任务轮询] 任务完成但未返回ZIP包下载链接，batch_id：{batch_id}")
             logger.info(f"[任务轮询] 结果ZIP包下载链接：{full_zip_url}...")
             return full_zip_url
         # 状态2：任务失败，提取错误信息抛出
