@@ -5,7 +5,7 @@ from app.core.logger import logger  # 复用项目全局logger
 
 
 def apply_api_rate_limit(
-        request_times: Deque[float],
+        request_times: Deque[float],#deque([时间请求1，时间请求2)
         max_requests: int,
         window_seconds: int = 60
 ) -> None:
