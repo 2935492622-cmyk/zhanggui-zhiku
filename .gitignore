@@ -22,3 +22,30 @@ dist/
 .idea/
 .vscode/
 .DS_Store
+
+
+# Local datasets, runtime output and logs
+/doc/
+/logs/
+/output/
+*.log
+# Additional environments, caches and generated files
+venv/
+env/
+ENV/
+.cache/
+.tox/
+.nox/
+.coverage.*
+coverage.xml
+*.sqlite
+*.sqlite3
+*.db
+*.tmp
+*.bak
+# Private credentials and local configuration
+.envrc
+*.pem
+*.key
+credentials.json
+secrets.json
