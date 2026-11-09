@@ -39,7 +39,7 @@ def step_1_get_inputs(state: ImportGraphState) -> Tuple[Any, str, int]:
     content = content.replace("\r\n", "\n").replace("\r", "\n")
     # 提取文件标题：有则用，无则默认"Unknown File"
     file_title = state.get("file_title", "Unknown File")
-    # 提取最大Chunk长度：有则用状态中的配置，无则用全局默认值
+    # 提取最大Chunk长度:
     max_len = DEFAULT_MAX_CONTENT_LENGTH
 
     logger.info(f"步骤1：输入数据加载完成，文件标题：{file_title}，最大Chunk长度：{max_len}")
@@ -52,20 +52,29 @@ def step_2_split_by_titles(content: str, file_title: str) -> Tuple[List[Dict[str
     LangChain前置预处理：将整份MD按标题拆分为独立章节，为后续精细化切分做基础
     :param content: 标准化后的MD完整内容（字符串）
     :param file_title: 所属文件标题，用于标记章节归属
-    :return: 切分后的章节列表/有效标题数量/原始文本总行数
+    :return: 切分后的章节列表/有效标题数量/原始文本总行数     （param参数）
+
+    Tuple：返回一个元组，包含三个元素
+    第一个：List，章节列表
+        列表中的每个元素是 Dict
+            字典的键是 str
+            字典的值是 Any
+    第二个：int，标题数量
+    第三个：int，行数
     """
     # 正则匹配Markdown 1-6级标题（核心规则，适配缩进/标准格式）
     # ^\s*：行首允许0/多个空格/Tab（兼容缩进的标题）
     # #{1,6}：匹配1-6个#（对应MD1-6级标题）
     # \s+：#后必须有至少1个空格（区分#是标题还是普通文本）
     # .+：标题文字至少1个字符（避免空标题）
+     #正则记不住就记不住吧，到时候会查就行
     title_pattern = r'^\s*#{1,6}\s+.+'
 
     # 将MD内容按换行符拆分为行列表，逐行处理
     lines = content.split("\n")
     sections = []  # 最终切分的章节列表
     current_title = ""  # 当前章节标题
-    current_lines = []  # 当前章节的行缓存
+    current_lines = []  # 当前章节的行缓存    就是尚未提交的章节
     title_count = 0  # 有效标题数量（非代码块内）
     in_code_block = False  # 代码块标记：避免误判代码块内的#为标题
 
@@ -82,8 +91,8 @@ def step_2_split_by_titles(content: str, file_title: str) -> Tuple[List[Dict[str
 
     # 逐行遍历，识别标题并切分章节
     for line in lines:
-        stripped_line = line.strip()
-        # 识别代码块边界（```/~~~）：进入/退出代码块时翻转状态
+        stripped_line = line.strip()  #strip()去掉字符串首尾的空格和换行符，方便后续判断
+        # 识别代码块边界（```/~~~）：进入/退出代码块时翻转状态.  stripped_line.startswith检查字符串是否以指定内容开头：
         if stripped_line.startswith("```") or stripped_line.startswith("~~~"):
             in_code_block = not in_code_block
             current_lines.append(line)
@@ -146,7 +155,7 @@ def _split_long_section(section: Dict[str, Any], max_length: int = DEFAULT_MAX_C
     # 提取章节标题，用于组装子Chunk前缀（保留标题上下文）
     title = section.get("title", "") or ""
     # 标题前缀：带空行分隔，与正文区分开
-    prefix = f"{title}\n\n" if title else ""
+    prefix = f"{title}\n\n" if title else ""  #值a if 条件 else 值b
     # 计算正文可用长度：总长度 - 标题前缀长度（避免标题占满Chunk额度）
     available_len = max_length - len(prefix)
     # 极端情况：标题长度超过阈值，无法切分，返回原章节
@@ -246,6 +255,7 @@ def step_4_refine_chunks(sections: List[Dict[str, Any]], max_len: int) -> List[D
     :param sections: 步骤3处理后的章节列表
     :param max_len: 单个Chunk最大字符长度
     :return: 长度适中、低碎片化的最终Chunk列表
+    #切长，合短，补齐  。对章节的进一步加工，切分单个超长章节，尝试合并相邻短块
     """
     # 边界处理：最大长度无效（空/≤0），直接返回原章节，避免切分异常
     if not max_len or max_len <= 0:
@@ -410,7 +420,9 @@ if __name__ == '__main__':
     logger.info(f"本地测试 - 项目根目录：{PROJECT_ROOT}")
 
     # 测试MD文件路径（需手动将测试文件放入对应目录）
-    test_md_name = os.path.join(r"output\hak180产品安全手册", "hak180产品安全手册.md")
+    test_md_name = os.path.join(
+    "output", "hak180产品安全手册", "hak180产品安全手册.md"
+)
     test_md_path = os.path.join(PROJECT_ROOT, test_md_name)
 
     # 校验测试文件是否存在

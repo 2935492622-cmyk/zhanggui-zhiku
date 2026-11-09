@@ -472,8 +472,6 @@ if __name__ == "__main__":
     test_md_path = str(
         PROJECT_ROOT
         / "output"
-        / "20260319"
-        / "7dff03bc-3389-4e05-950a-fb1c1027784c"
         / "hak180产品安全手册"
         / "hak180产品安全手册.md"
     )
